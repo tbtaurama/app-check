@@ -1,4 +1,3 @@
-streamlit
 pandas
 import datetime
 import sqlite3
