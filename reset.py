@@ -4,8 +4,8 @@ import pandas as pd
 import streamlit as st
 import altair as alt
 
-# Gunakan v4 (atau ganti ke v5 jika ingin mulai dari nol lagi)
-DB_NAME = "prod_tracker_v4.db"
+# Menggunakan DB v5 untuk pengujian akhir yang bersih dan sinkron
+DB_NAME = "prod_tracker_v5.db"
 
 # ==========================================
 # 1. SETUP DATABASE
@@ -22,7 +22,7 @@ def init_db():
                  (key TEXT PRIMARY KEY, value TEXT)''')
     
     initial_users = [
-        ("resetapp", "Super Admin (Anda)", "12345#", "admin", "Mengawal sistem produktivitas 60 hari", 0),
+        ("resetapp", "Super Admin (Anda)", "12345#", "admin", "Mengelola 60 Hari Produktivitas", 0),
         ("azwa1", "Azwa", "12345#", "peserta", "", 0),
         ("iqbal2", "Iqbal", "12345#", "peserta", "", 0),
         ("habib3", "Habib", "12345#", "peserta", "", 0),
@@ -48,9 +48,9 @@ def set_setting(key, val):
     conn.commit()
     conn.close()
 
-# ==========================================
-# 2. LOGIKA EVALUASI (GAGAL & BINTANG)
-# ==========================================
+# ====================================================================
+# 2. LOGIKA EVALUASI (POIN, GAGAL, & BINTANG)
+# ====================================================================
 def evaluate_participants():
     conn = sqlite3.connect(DB_NAME)
     users = pd.read_sql_query("SELECT * FROM users WHERE role='peserta'", conn)
@@ -64,6 +64,7 @@ def evaluate_participants():
         uname = user['username']
         name = user['full_name']
         is_failed = bool(user['is_failed'])
+        goal = user['goal']
         
         user_records = records[records['username'] == uname].sort_values('day_number')
         records_dict = user_records.set_index('day_number')['status'].to_dict()
@@ -99,6 +100,7 @@ def evaluate_participants():
                 current_block_misses += 1
                 active_streak_for_stars = 0
                 
+                # Pemicu Gagal: 2x bolos beruntun ATAU >1x bolos dalam 7 hari
                 if (consecutive_misses >= 2 or current_block_misses > 1) and not is_failed:
                     is_failed = True
                     conn_f = sqlite3.connect(DB_NAME)
@@ -111,8 +113,12 @@ def evaluate_participants():
         trajectory_records.extend(score_history)
         
         leaderboard_data.append({
-            "Nama": name, "Username": uname, "Tujuan": user['goal'],
-            "Poin": cumulative_score, "Hari": max_day,
+            "Peringkat": 0, # Diisi saat sorting
+            "Nama": name, 
+            "Username": uname, 
+            "Tujuan Utama": goal if goal else "🎯 Belum diisi",
+            "Total Poin": cumulative_score, 
+            "Hari": max_day,
             "Bintang": "⭐" * stars_earned if stars_earned > 0 else "—",
             "Status": "❌ GAGAL" if is_failed else "🟢 AKTIF",
             "is_failed": is_failed,
@@ -121,12 +127,18 @@ def evaluate_participants():
             "awal_blok": ((max_day // 7) * 7) + 1
         })
         
-    return pd.DataFrame(leaderboard_data), pd.DataFrame(trajectory_records)
+    df_ldb = pd.DataFrame(leaderboard_data)
+    if not df_ldb.empty:
+        # Urutkan berdasarkan poin tertinggi untuk menentukan peringkat
+        df_ldb = df_ldb.sort_values(by="Total Poin", ascending=False).reset_index(drop=True)
+        df_ldb['Peringkat'] = df_ldb.index + 1
+        
+    return df_ldb, pd.DataFrame(trajectory_records)
 
-# ==========================================
+# ====================================================================
 # 3. SISTEM LOGIN
-# ==========================================
-st.set_page_config(page_title="Admin Panel: Reset Authority", layout="centered")
+# ====================================================================
+st.set_page_config(page_title="Productivity Race Tracker", layout="centered")
 
 if 'logged_in' not in st.session_state:
     st.session_state.update({'logged_in': False, 'current_user': "", 'current_name': "", 'current_role': ""})
@@ -137,133 +149,230 @@ def login():
     res = conn.execute("SELECT full_name, role FROM users WHERE username=? AND password=?", (u, p)).fetchone()
     conn.close()
     if res: st.session_state.update({'logged_in': True, 'current_user': u, 'current_name': res[0], 'current_role': res[1]})
-    else: st.error("Username/Password Salah")
+    else: st.error("❌ Username atau Password salah.")
 
 if not st.session_state['logged_in']:
-    st.title("🔒 Portal Login")
+    st.title("🔒 Portal Login Produktivitas")
     with st.form("l"):
         st.text_input("Username", key="l_u")
         st.text_input("Password", type="password", key="l_p")
         st.form_submit_button("Masuk", on_click=login, use_container_width=True)
     st.stop()
 
-# ==========================================
-# 4. DASHBOARD SUPER ADMIN (DENGAN FITUR RESET)
-# ==========================================
+# ====================================================================
+# 4. DASHBOARD SUPER ADMIN (REAL-TIME MONITORING & CONTROLS)
+# ====================================================================
 if st.session_state['current_role'] == "admin":
-    st.title("👑 Super Admin Control Panel")
+    st.title("👑 Panel Super Admin (Live Sync)")
     
-    t1, t2 = st.tabs(["⚙️ Pengaturan & Reset", "📊 Monitoring"])
-    
-    with t1:
-        st.subheader("Testing & Operational")
-        mode_test = get_setting('test_mode')
-        new_test = st.toggle("Unlock 24 Jam (Mode Testing)", value=(mode_test == 'on'))
-        if new_test != (mode_test == 'on'):
-            set_setting('test_mode', 'on' if new_test else 'off')
+    # 1. KONTROL OPERASIONAL & TESTING
+    mode_test = get_setting('test_mode')
+    new_test = st.toggle("🔓 Buka Kunci Waktu 24 Jam (Mode Testing)", value=(mode_test == 'on'))
+    if new_test != (mode_test == 'on'):
+        set_setting('test_mode', 'on' if new_test else 'off')
+        st.rerun()
+        
+    app_status = get_setting('app_status')
+    if app_status == 'active':
+        if st.button("Deklarasikan 🔴 LIBUR NASIONAL Hari Ini", type="primary", use_container_width=True):
+            set_setting('app_status', 'holiday')
+            st.rerun()
+    else:
+        if st.button("Kembalikan ke Mode 🟢 AKTIF", type="primary", use_container_width=True):
+            set_setting('app_status', 'active')
             st.rerun()
             
-        st.divider()
-        st.subheader("🛠️ Management Peserta (Reset & Shadow Control)")
+    st.divider()
+    
+    # 2. MONITORING REAL-TIME (Ditaruh di atas agar langsung terlihat saat klik)
+    st.subheader("📊 Papan Peringkat Live")
+    df_l, df_t = evaluate_participants()
+    
+    if not df_l.empty:
+        st.dataframe(
+            df_l[['Peringkat', 'Nama', 'Status', 'Total Poin', 'Bintang', 'Tujuan Utama']], 
+            use_container_width=True, 
+            hide_index=True
+        )
         
-        df_l, _ = evaluate_participants()
-        for _, p in df_l.iterrows():
-            with st.expander(f"Kelola {p['Nama']} ({p['Status']})"):
-                # FITUR RESET & PULIHKAN (Paling Krusial)
-                st.write("---")
-                st.warning(f"**Zona Bahaya:** Mereset akan menghapus semua poin {p['Nama']} dan mengaktifkan kembali akunnya jika sebelumnya GAGAL.")
-                if st.button(f"♻️ Reset Total & Pulihkan Akun {p['Username']}", key=f"reset_{p['Username']}", type="secondary", use_container_width=True):
-                    conn_r = sqlite3.connect(DB_NAME)
-                    # 1. Hapus semua riwayat check-in
-                    conn_r.execute("DELETE FROM check_ins WHERE username=?", (p['Username'],))
-                    # 2. Kembalikan status ke Aktif (0)
-                    conn_r.execute("UPDATE users SET is_failed=0 WHERE username=?", (p['Username'],))
-                    conn_r.commit()
-                    conn_r.close()
-                    st.success(f"Akun {p['Nama']} telah dibersihkan dan diaktifkan kembali!")
-                    st.rerun()
-                
-                st.write("---")
-                st.write("**Simulasi Input Manual:**")
-                c1, c2 = st.columns(2)
-                h_next = p['Hari'] + 1
-                if c1.button(f"In H-{h_next}", key=f"in_{p['Username']}"):
-                    sqlite3.connect(DB_NAME).execute("INSERT INTO check_ins VALUES (?,?,?,?)", (p['Username'], h_next, 'checked_in', datetime.datetime.now())).connection.commit()
-                    st.rerun()
-                if c2.button(f"Out H-{h_next}", key=f"ms_{p['Username']}"):
-                    sqlite3.connect(DB_NAME).execute("INSERT INTO check_ins VALUES (?,?,?,?)", (p['Username'], h_next, 'missed', datetime.datetime.now())).connection.commit()
-                    st.rerun()
-
-    with t2:
-        df_l, df_t = evaluate_participants()
-        st.dataframe(df_l[['Nama', 'Status', 'Poin', 'Bintang', 'Hari']], use_container_width=True, hide_index=True)
+        # Grafik Garis Pertumbuhan Poin
         if not df_t.empty:
-            line = alt.Chart(df_t).mark_line(strokeWidth=3).encode(x='Hari:Q', y='Poin:Q', color='Nama:N')
-            st.altair_chart(line.properties(height=350), use_container_width=True)
+            line = alt.Chart(df_t).mark_line(strokeWidth=2).encode(
+                x=alt.X('Hari:Q', scale=alt.Scale(domain=[0, 60])),
+                y='Poin:Q', color='Nama:N'
+            )
+            st.altair_chart(line.properties(height=200), use_container_width=True)
             
-    if st.sidebar.button("Log Out"):
+    st.divider()
+    
+    # 3. PANEL SIMULASI & RESET (Shadow Control)
+    st.subheader("🛠️ Simulasi Klik & Reset Otoritas")
+    st.write("Perubahan di bawah ini akan langsung memperbarui tabel di atas secara instan.")
+    
+    for _, p in df_l.iterrows():
+        with st.expander(f"Kelola: {p['Nama']} (Poin: {p['Total Poin']} | {p['Status']})"):
+            # Tombol Input Presensi Instan (Menggunakan OR REPLACE agar pasti masuk)
+            h_next = p['Hari'] + 1
+            c1, c2 = st.columns(2)
+            
+            if c1.button(f"✅ Input Check-In (H-{h_next})", key=f"in_{p['Username']}", use_container_width=True):
+                conn_ex = sqlite3.connect(DB_NAME)
+                conn_ex.execute("INSERT OR REPLACE INTO check_ins VALUES (?, ?, ?, ?)", 
+                                (p['Username'], h_next, 'checked_in', datetime.datetime.now()))
+                conn_ex.commit()
+                conn_ex.close()
+                st.rerun() # Langsung refresh halaman dan tabel di atas
+                
+            if c2.button(f"❌ Input Bolos (H-{h_next})", key=f"ms_{p['Username']}", use_container_width=True):
+                conn_ex = sqlite3.connect(DB_NAME)
+                conn_ex.execute("INSERT OR REPLACE INTO check_ins VALUES (?, ?, ?, ?)", 
+                                (p['Username'], h_next, 'missed', datetime.datetime.now()))
+                conn_ex.commit()
+                conn_ex.close()
+                st.rerun()
+                
+            # Tombol Reset & Pulihkan
+            st.write("")
+            if st.button(f"♻️ Reset Skor dari 0 & Pulihkan Status {p['Username']}", key=f"rst_{p['Username']}", type="secondary", use_container_width=True):
+                conn_r = sqlite3.connect(DB_NAME)
+                conn_r.execute("DELETE FROM check_ins WHERE username=?", (p['Username'],))
+                conn_r.execute("UPDATE users SET is_failed=0 WHERE username=?", (p['Username'],))
+                conn_r.commit()
+                conn_r.close()
+                st.success(f"Data {p['Nama']} di-reset!")
+                st.rerun()
+
+    st.divider()
+    if st.button("Log Out Admin", use_container_width=True):
         st.session_state['logged_in'] = False
         st.rerun()
     st.stop()
 
-# ==========================================
-# 5. DASHBOARD PESERTA (MOBILE FRIENDLY)
-# ==========================================
+# ====================================================================
+# 5. DASHBOARD PESERTA (TERMASUK LEADERBOARD TERBUKA)
+# ====================================================================
 df_leaderboard, df_trajectory = evaluate_participants()
 my_data = df_leaderboard[df_leaderboard['Username'] == st.session_state['current_user']].iloc[0]
 
-st.title("🚴 Productivity Race")
+st.title("🚴 Balapan Produktivitas 60 Hari")
 
+# 1. GRAFIK BALAPAN SEPEDA (ALTAIR)
 if not df_trajectory.empty:
-    chart = alt.Chart(df_trajectory).mark_line(strokeWidth=3).encode(
-        x=alt.X('Hari:Q', scale=alt.Scale(domain=[0, 60])),
-        y='Poin:Q', color='Nama:N'
+    line_chart = alt.Chart(df_trajectory).mark_line(strokeWidth=3).encode(
+        x=alt.X('Hari:Q', scale=alt.Scale(domain=[0, 60]), title="Lintasan Hari (Start ➔ Finish)"),
+        y=alt.Y('Poin:Q', title="Akumulasi Poin"),
+        color=alt.Color('Nama:N', legend=alt.Legend(orient="bottom", title=None))
     )
-    st.altair_chart(chart.properties(height=300), use_container_width=True)
+    
+    idx_max = df_trajectory.groupby('Nama')['Hari'].idxmax()
+    df_endpoints = df_trajectory.loc[idx_max]
+    
+    bicycles = alt.Chart(df_endpoints).mark_point(filled=True, size=150, shape="circle").encode(
+        x='Hari:Q', y='Poin:Q', color='Nama:N'
+    )
+    
+    labels = alt.Chart(df_endpoints).mark_text(
+        align='left', dx=10, dy=-5, fontWeight='bold', fontSize=12
+    ).encode(
+        x='Hari:Q', y='Poin:Q', text='Nama:N', color='Nama:N'
+    )
+    
+    st.altair_chart((line_chart + bicycles + labels).properties(height=280), use_container_width=True)
 
-# North Star Goal
-with st.form("g"):
-    g_text = st.text_input("🎯 Tujuan Utama (Maks 50 Karakter)", value=my_data['Tujuan'], max_chars=50)
-    if st.form_submit_button("Simpan Target", use_container_width=True):
+# 2. PENAMBAHAN FITUR BARU: PAPAN PERINGKAT (LEADERBOARD) TERBUKA
+st.subheader("🏆 Klasemen Sementara (Leaderboard)")
+st.dataframe(
+    df_leaderboard[['Peringkat', 'Nama', 'Total Poin', 'Bintang', 'Status', 'Tujuan Utama']], 
+    use_container_width=True, 
+    hide_index=True
+)
+
+st.divider()
+
+# 3. KELOLA TUJUAN & METRIK PRIBADI
+st.subheader("🎯 North Star & Pencapaian Anda")
+with st.form("g_form"):
+    g_text = st.text_input("Tujuan Utama Anda (Maks. 50 Karakter):", value=my_data['Tujuan Utama'], max_chars=50)
+    if st.form_submit_button("Simpan Tujuan", use_container_width=True):
         sqlite3.connect(DB_NAME).execute("UPDATE users SET goal=? WHERE username=?", (g_text, st.session_state['current_user'])).connection.commit()
         st.rerun()
 
-st.metric("Poin Akumulasi", f"{my_data['Poin']} pts", f"Bintang: {my_data['Bintang']}")
+col_m1, col_m2 = st.columns(2)
+with col_m1: st.metric("Total Poin Anda", f"{my_data['Total Poin']} Poin")
+with col_m2: st.metric("Lencana Bintang ⭐", my_data['Bintang'])
 
-# Logic Presensi
+st.divider()
+
+# 4. PANEL PRESENSI HARIAN
+st.subheader("📅 Panel Presensi Harian")
+
+if my_data['Status'] == "❌ GAGAL":
+    st.error("💀 **ANDA TELAH TERELIMINASI DARI PROGRAM.**\n\nAnda telah melanggar batas toleransi absen. Akses presensi ditutup.")
+    st.stop()
+
+# Peringatan Kritis
+if my_data['kemarin_bolos']:
+    st.warning("⚠️ **KRITIS:** Anda bolos kemarin. Jika bolos lagi hari ini, Anda langsung GAGAL (Never Miss Twice).")
+elif my_data['sisa_kuota'] <= 0:
+    st.warning(f"⚠️ **KUOTA MINGGU INI HABIS:** Anda sudah bolos 1x di siklus minggu ini. Bolos lagi = GAGAL.")
+else:
+    st.info(f"💡 Kuota aman. Sisa hak bolos minggu ini: {my_data['sisa_kuota']} kali.")
+
 is_test = (get_setting('test_mode') == 'on')
 is_libur = (get_setting('app_status') == 'holiday')
+
 wib = datetime.timezone(datetime.timedelta(hours=7))
 t_now = datetime.datetime.now(wib)
 is_time = (datetime.time(20,0) <= t_now.time() <= datetime.time(23,0))
 
-if my_data['Status'] == "❌ GAGAL":
-    st.error("💀 **ANDA TELAH TERELIMINASI**\n\nHubungi Super Admin jika ini adalah kesalahan teknis untuk memulihkan akun Anda.")
+t_str = t_now.strftime("%H:%M:%S WIB")
+
+if is_libur: 
+    st.success(f"📢 **HARI LIBUR NASIONAL** | Waktu: **{t_str}**\n\nPresensi diliburkan. Poin dan streak Bintang Anda aman.")
+    conn = sqlite3.connect(DB_NAME)
+    ulogs = pd.read_sql_query("SELECT day_number FROM check_ins WHERE username=?", conn, params=(st.session_state['current_user'],))['day_number'].tolist()
+    ht = max(ulogs) + 1 if ulogs else 1
+    if ht <= 60:
+        conn.execute("INSERT OR IGNORE INTO check_ins VALUES (?, ?, ?, ?)", (st.session_state['current_user'], ht, "holiday", datetime.datetime.now())).connection.commit()
+    conn.close()
     st.stop()
+elif is_test: st.warning("🛠️ MODE TESTING: Tombol aktif 24 Jam.")
+elif is_time: st.success(f"✅ JENDELA TERBUKA | Waktu: **{t_str}** (Batas: 20.00-23.00 WIB)")
+else: st.warning(f"🔒 PRESENSI TERTUTUP | Waktu: **{t_str}**\n\nDibuka pukul 20.00-23.00 WIB.")
 
 can_check = (is_time or is_test) and not is_libur
 
-# Tampilan Status Jam
-if is_libur: st.info("🏖️ Hari Libur Nasional")
-elif is_test: st.warning("🛠️ MODE TESTING ON (24 Jam)")
-elif is_time: st.success("✅ Jendela Presensi Terbuka (20.00-23.00)")
-else: st.warning("🔒 Presensi dibuka pukul 20.00 WIB")
-
-# Tombol Input
 conn = sqlite3.connect(DB_NAME)
-user_logs = pd.read_sql_query("SELECT day_number FROM check_ins WHERE username=?", conn, params=(st.session_state['current_user'],))['day_number'].tolist()
-h_target = max(user_logs) + 1 if user_logs else 1
+ulogs_dict = pd.read_sql_query("SELECT day_number, status FROM check_ins WHERE username=?", conn, params=(st.session_state['current_user'],)).set_index('day_number')['status'].to_dict()
 
-if h_target <= 60:
+h_target = 1
+while h_target in ulogs_dict: h_target += 1
+
+if h_target > 60:
+    st.success("🎉 **SELAMAT! Anda telah menyelesaikan program 60 Hari!**")
+else:
     c1, c2 = st.columns(2)
-    if c1.button(f"Check-In H-{h_target}", type="primary", disabled=not can_check, use_container_width=True):
-        conn.execute("INSERT INTO check_ins VALUES (?,?,?,?)", (st.session_state['current_user'], h_target, 'checked_in', datetime.datetime.now())).connection.commit()
+    if c1.button(f"✅ Check-In (H-{h_target})", type="primary", disabled=not can_check, use_container_width=True):
+        conn.execute("INSERT OR REPLACE INTO check_ins VALUES (?, ?, ?, ?)", (st.session_state['current_user'], h_target, 'checked_in', datetime.datetime.now())).connection.commit()
         st.rerun()
-    if c2.button(f"Bolos H-{h_target}", type="secondary", disabled=not can_check, use_container_width=True):
-        conn.execute("INSERT INTO check_ins VALUES (?,?,?,?)", (st.session_state['current_user'], h_target, 'missed', datetime.datetime.now())).connection.commit()
+    if c2.button(f"❌ Bolos (H-{h_target})", type="secondary", disabled=not can_check, use_container_width=True):
+        conn.execute("INSERT OR REPLACE INTO check_ins VALUES (?, ?, ?, ?)", (st.session_state['current_user'], h_target, 'missed', datetime.datetime.now())).connection.commit()
         st.rerun()
 conn.close()
 
-if st.sidebar.button("Log Out"):
+# Riwayat Visual
+st.markdown("<br>**Riwayat Visual Anda:**", unsafe_allow_html=True)
+gcols = st.columns(10)
+for d in range(1, 61):
+    icn = "⚪"
+    if d in ulogs_dict:
+        v = ulogs_dict[d]
+        if v == "checked_in": icn = "🟢"
+        elif v == "missed": icn = "🔴"
+        elif v == "holiday": icn = "🔵"
+    with gcols[(d-1)%10]: st.markdown(f"<div style='text-align:center; font-size:10px;'>H{d}<br>{icn}</div>", unsafe_allow_html=True)
+
+st.divider()
+if st.button("Log Out Akun", use_container_width=True):
     st.session_state['logged_in'] = False
     st.rerun()
