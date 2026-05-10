@@ -3,11 +3,14 @@ import sqlite3
 import pandas as pd
 import streamlit as st
 
+# Menggunakan file DB baru agar tidak bentrok dengan skema email lama
+DB_NAME = "prod_tracker_v2.db"
+
 # ==========================================
 # 1. SETUP DATABASE & AKUN BARU
 # ==========================================
 def init_db():
-    conn = sqlite3.connect("prod_tracker.db")
+    conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     
     # Tabel Pengguna (Username + Password + Role)
@@ -43,7 +46,7 @@ init_db()
 
 # FUNGSI BANTU PENGATURAN SISTEM
 def get_app_status():
-    conn = sqlite3.connect("prod_tracker.db")
+    conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT value FROM system_settings WHERE key='app_status'")
     res = c.fetchone()
@@ -51,7 +54,7 @@ def get_app_status():
     return res[0] if res else "active"
 
 def set_app_status(status):
-    conn = sqlite3.connect("prod_tracker.db")
+    conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("UPDATE system_settings SET value=? WHERE key='app_status'", (status,))
     conn.commit()
@@ -61,7 +64,7 @@ def set_app_status(status):
 # 2. LOGIKA POIN ARITMATIKA
 # ==========================================
 def get_user_scores():
-    conn = sqlite3.connect("prod_tracker.db")
+    conn = sqlite3.connect(DB_NAME)
     # Hanya hitung yang memiliki role 'peserta'
     users = pd.read_sql_query("SELECT * FROM users WHERE role='peserta'", conn)
     records = pd.read_sql_query("SELECT * FROM check_ins", conn)
@@ -122,7 +125,7 @@ def login():
     input_uname = st.session_state['login_uname'].strip()
     input_pass = st.session_state['login_pass'].strip()
     
-    conn = sqlite3.connect("prod_tracker.db")
+    conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT full_name, role FROM users WHERE username=? AND password=?", (input_uname, input_pass))
     result = c.fetchone()
@@ -248,7 +251,7 @@ elif status_dalam_jendela:
 else:
     st.warning(f"🔒 **Jendela Check-In TERTUTUP** | Waktu Server: **{tampilan_waktu}**\n\n*Check-in hanya dapat dilakukan antara pukul **20.00 hingga 23.00 WIB**.*")
 
-conn = sqlite3.connect("prod_tracker.db")
+conn = sqlite3.connect(DB_NAME)
 user_logs = pd.read_sql_query("SELECT day_number, status FROM check_ins WHERE username=?", conn, params=(uname_aktif,)).set_index('day_number')['status'].to_dict()
 
 hari_target = 1
