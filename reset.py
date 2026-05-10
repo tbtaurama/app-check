@@ -365,29 +365,33 @@ if st.button("Log Out Akun", use_container_width=True):
     st.session_state['logged_in'] = False
     st.rerun()
 
-# ... (kode sebelumnya tetap sama)
+# ... (kode sebelumnya dari koneksi database dan penentuan h_target)
 
 if h_target > 60:
     st.success("🎉 **SELAMAT! Anda telah menyelesaikan program 60 Hari!**")
 else:
     c1, c2 = st.columns(2)
     
-    # Label tombol dinamis menyesuaikan status kunci
+    # Label tombol dinamis yang responsif terhadap waktu dan libur
     if is_libur:
-        lbl_in = "🔒 Libur Nasional"
-        lbl_ms = "🔒 Libur Nasional"
+        lbl_in = "🔒 Libur Nasional (In)"
+        lbl_ms = "🔒 Libur Nasional (Out)"
     elif not can_check:
-        lbl_in = f"🔒 Terkunci (H-{h_target})"
-        lbl_ms = f"🔒 Terkunci (H-{h_target})"
+        lbl_in = f"🔒 Check-In Terkunci (H-{h_target})"
+        lbl_ms = f"🔒 Bolos Terkunci (H-{h_target})"
     else:
         lbl_in = f"✅ Check-In (H-{h_target})"
         lbl_ms = f"❌ Bolos (H-{h_target})"
         
-    if c1.button(lbl_in, type="primary", disabled=not can_check, use_container_width=True):
+    # PENAMBAHAN KEY UNIK AGAR TIDAK TERJADI DUPLICATE ID ERROR
+    if c1.button(lbl_in, type="primary", disabled=not can_check, key=f"btn_in_{st.session_state['current_user']}_{h_target}", use_container_width=True):
         conn.execute("INSERT OR REPLACE INTO check_ins VALUES (?, ?, ?, ?)", (st.session_state['current_user'], h_target, 'checked_in', datetime.datetime.now())).connection.commit()
         st.rerun()
-    if c2.button(lbl_ms, type="secondary", disabled=not can_check, use_container_width=True):
+        
+    if c2.button(lbl_ms, type="secondary", disabled=not can_check, key=f"btn_ms_{st.session_state['current_user']}_{h_target}", use_container_width=True):
         conn.execute("INSERT OR REPLACE INTO check_ins VALUES (?, ?, ?, ?)", (st.session_state['current_user'], h_target, 'missed', datetime.datetime.now())).connection.commit()
         st.rerun()
 
-# ... (lanjutan kode grid visual)
+conn.close()
+
+# ... (lanjutan kode grid visual harian)
