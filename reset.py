@@ -4,12 +4,12 @@ import pandas as pd
 import streamlit as st
 import altair as alt
 
-# Menggunakan DB v5 untuk pengujian akhir yang bersih dan sinkron
+# Tetap menggunakan DB v5 agar kompatibel dengan data yang sudah berjalan
 DB_NAME = "prod_tracker_v5.db"
 
-# ==========================================
+# ====================================================================
 # 1. SETUP DATABASE
-# ==========================================
+# ====================================================================
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -64,7 +64,6 @@ def evaluate_participants():
         uname = user['username']
         name = user['full_name']
         is_failed = bool(user['is_failed'])
-        goal = user['goal']
         
         user_records = records[records['username'] == uname].sort_values('day_number')
         records_dict = user_records.set_index('day_number')['status'].to_dict()
@@ -113,10 +112,9 @@ def evaluate_participants():
         trajectory_records.extend(score_history)
         
         leaderboard_data.append({
-            "Peringkat": 0, # Diisi saat sorting
+            "Peringkat": 0, 
             "Nama": name, 
             "Username": uname, 
-            "Tujuan Utama": goal if goal else "🎯 Belum diisi",
             "Total Poin": cumulative_score, 
             "Hari": max_day,
             "Bintang": "⭐" * stars_earned if stars_earned > 0 else "—",
@@ -129,7 +127,6 @@ def evaluate_participants():
         
     df_ldb = pd.DataFrame(leaderboard_data)
     if not df_ldb.empty:
-        # Urutkan berdasarkan poin tertinggi untuk menentukan peringkat
         df_ldb = df_ldb.sort_values(by="Total Poin", ascending=False).reset_index(drop=True)
         df_ldb['Peringkat'] = df_ldb.index + 1
         
@@ -160,12 +157,11 @@ if not st.session_state['logged_in']:
     st.stop()
 
 # ====================================================================
-# 4. DASHBOARD SUPER ADMIN (REAL-TIME MONITORING & CONTROLS)
+# 4. DASHBOARD SUPER ADMIN
 # ====================================================================
 if st.session_state['current_role'] == "admin":
     st.title("👑 Panel Super Admin (Live Sync)")
     
-    # 1. KONTROL OPERASIONAL & TESTING
     mode_test = get_setting('test_mode')
     new_test = st.toggle("🔓 Buka Kunci Waktu 24 Jam (Mode Testing)", value=(mode_test == 'on'))
     if new_test != (mode_test == 'on'):
@@ -184,18 +180,17 @@ if st.session_state['current_role'] == "admin":
             
     st.divider()
     
-    # 2. MONITORING REAL-TIME (Ditaruh di atas agar langsung terlihat saat klik)
     st.subheader("📊 Papan Peringkat Live")
     df_l, df_t = evaluate_participants()
     
     if not df_l.empty:
+        # Kolom Tujuan Utama dihapus dari tampilan agar bersih
         st.dataframe(
-            df_l[['Peringkat', 'Nama', 'Status', 'Total Poin', 'Bintang', 'Tujuan Utama']], 
+            df_l[['Peringkat', 'Nama', 'Status', 'Total Poin', 'Bintang']], 
             use_container_width=True, 
             hide_index=True
         )
         
-        # Grafik Garis Pertumbuhan Poin
         if not df_t.empty:
             line = alt.Chart(df_t).mark_line(strokeWidth=2).encode(
                 x=alt.X('Hari:Q', scale=alt.Scale(domain=[0, 60])),
@@ -205,13 +200,11 @@ if st.session_state['current_role'] == "admin":
             
     st.divider()
     
-    # 3. PANEL SIMULASI & RESET (Shadow Control)
     st.subheader("🛠️ Simulasi Klik & Reset Otoritas")
     st.write("Perubahan di bawah ini akan langsung memperbarui tabel di atas secara instan.")
     
     for _, p in df_l.iterrows():
         with st.expander(f"Kelola: {p['Nama']} (Poin: {p['Total Poin']} | {p['Status']})"):
-            # Tombol Input Presensi Instan (Menggunakan OR REPLACE agar pasti masuk)
             h_next = p['Hari'] + 1
             c1, c2 = st.columns(2)
             
@@ -221,7 +214,7 @@ if st.session_state['current_role'] == "admin":
                                 (p['Username'], h_next, 'checked_in', datetime.datetime.now()))
                 conn_ex.commit()
                 conn_ex.close()
-                st.rerun() # Langsung refresh halaman dan tabel di atas
+                st.rerun()
                 
             if c2.button(f"❌ Input Bolos (H-{h_next})", key=f"ms_{p['Username']}", use_container_width=True):
                 conn_ex = sqlite3.connect(DB_NAME)
@@ -231,7 +224,6 @@ if st.session_state['current_role'] == "admin":
                 conn_ex.close()
                 st.rerun()
                 
-            # Tombol Reset & Pulihkan
             st.write("")
             if st.button(f"♻️ Reset Skor dari 0 & Pulihkan Status {p['Username']}", key=f"rst_{p['Username']}", type="secondary", use_container_width=True):
                 conn_r = sqlite3.connect(DB_NAME)
@@ -249,62 +241,13 @@ if st.session_state['current_role'] == "admin":
     st.stop()
 
 # ====================================================================
-# 5. DASHBOARD PESERTA (TERMASUK LEADERBOARD TERBUKA)
+# 5. DASHBOARD PESERTA (REORDERED & CLEANED)
 # ====================================================================
 df_leaderboard, df_trajectory = evaluate_participants()
 my_data = df_leaderboard[df_leaderboard['Username'] == st.session_state['current_user']].iloc[0]
 
-st.title("🚴 Balapan Produktivitas 60 Hari")
-
-# 1. GRAFIK BALAPAN SEPEDA (ALTAIR)
-if not df_trajectory.empty:
-    line_chart = alt.Chart(df_trajectory).mark_line(strokeWidth=3).encode(
-        x=alt.X('Hari:Q', scale=alt.Scale(domain=[0, 60]), title="Lintasan Hari (Start ➔ Finish)"),
-        y=alt.Y('Poin:Q', title="Akumulasi Poin"),
-        color=alt.Color('Nama:N', legend=alt.Legend(orient="bottom", title=None))
-    )
-    
-    idx_max = df_trajectory.groupby('Nama')['Hari'].idxmax()
-    df_endpoints = df_trajectory.loc[idx_max]
-    
-    bicycles = alt.Chart(df_endpoints).mark_point(filled=True, size=150, shape="circle").encode(
-        x='Hari:Q', y='Poin:Q', color='Nama:N'
-    )
-    
-    labels = alt.Chart(df_endpoints).mark_text(
-        align='left', dx=10, dy=-5, fontWeight='bold', fontSize=12
-    ).encode(
-        x='Hari:Q', y='Poin:Q', text='Nama:N', color='Nama:N'
-    )
-    
-    st.altair_chart((line_chart + bicycles + labels).properties(height=280), use_container_width=True)
-
-# 2. PENAMBAHAN FITUR BARU: PAPAN PERINGKAT (LEADERBOARD) TERBUKA
-st.subheader("🏆 Klasemen Sementara (Leaderboard)")
-st.dataframe(
-    df_leaderboard[['Peringkat', 'Nama', 'Total Poin', 'Bintang', 'Status', 'Tujuan Utama']], 
-    use_container_width=True, 
-    hide_index=True
-)
-
-st.divider()
-
-# 3. KELOLA TUJUAN & METRIK PRIBADI
-st.subheader("🎯 North Star & Pencapaian Anda")
-with st.form("g_form"):
-    g_text = st.text_input("Tujuan Utama Anda (Maks. 50 Karakter):", value=my_data['Tujuan Utama'], max_chars=50)
-    if st.form_submit_button("Simpan Tujuan", use_container_width=True):
-        sqlite3.connect(DB_NAME).execute("UPDATE users SET goal=? WHERE username=?", (g_text, st.session_state['current_user'])).connection.commit()
-        st.rerun()
-
-col_m1, col_m2 = st.columns(2)
-with col_m1: st.metric("Total Poin Anda", f"{my_data['Total Poin']} Poin")
-with col_m2: st.metric("Lencana Bintang ⭐", my_data['Bintang'])
-
-st.divider()
-
-# 4. PANEL PRESENSI HARIAN
-st.subheader("📅 Panel Presensi Harian")
+# --- BAGIAN A: PANEL PRESENSI HARIAN (DIPINDAHKAN KE PALING ATAS) ---
+st.title("📅 Panel Presensi Harian")
 
 if my_data['Status'] == "❌ GAGAL":
     st.error("💀 **ANDA TELAH TERELIMINASI DARI PROGRAM.**\n\nAnda telah melanggar batas toleransi absen. Akses presensi ditutup.")
@@ -360,7 +303,7 @@ else:
         st.rerun()
 conn.close()
 
-# Riwayat Visual
+# Riwayat Visual Grid
 st.markdown("<br>**Riwayat Visual Anda:**", unsafe_allow_html=True)
 gcols = st.columns(10)
 for d in range(1, 61):
@@ -371,6 +314,51 @@ for d in range(1, 61):
         elif v == "missed": icn = "🔴"
         elif v == "holiday": icn = "🔵"
     with gcols[(d-1)%10]: st.markdown(f"<div style='text-align:center; font-size:10px;'>H{d}<br>{icn}</div>", unsafe_allow_html=True)
+
+# Tampilan Metrik Pribadi Tepat di Bawah Presensi
+st.write("")
+col_m1, col_m2 = st.columns(2)
+with col_m1: st.metric("Total Poin Anda", f"{my_data['Total Poin']} Poin")
+with col_m2: st.metric("Lencana Bintang ⭐", my_data['Bintang'])
+
+st.divider()
+
+# --- BAGIAN B: BALAPAN PRODUKTIVITAS 60 HARI ---
+st.subheader("🚴 Balapan Produktivitas 60 Hari")
+
+if not df_trajectory.empty:
+    line_chart = alt.Chart(df_trajectory).mark_line(strokeWidth=3).encode(
+        x=alt.X('Hari:Q', scale=alt.Scale(domain=[0, 60]), title="Lintasan Hari (Start ➔ Finish)"),
+        y=alt.Y('Poin:Q', title="Akumulasi Poin"),
+        color=alt.Color('Nama:N', legend=alt.Legend(orient="bottom", title=None))
+    )
+    
+    idx_max = df_trajectory.groupby('Nama')['Hari'].idxmax()
+    df_endpoints = df_trajectory.loc[idx_max]
+    
+    bicycles = alt.Chart(df_endpoints).mark_point(filled=True, size=150, shape="circle").encode(
+        x='Hari:Q', y='Poin:Q', color='Nama:N'
+    )
+    
+    labels = alt.Chart(df_endpoints).mark_text(
+        align='left', dx=10, dy=-5, fontWeight='bold', fontSize=12
+    ).encode(
+        x='Hari:Q', y='Poin:Q', text='Nama:N', color='Nama:N'
+    )
+    
+    st.altair_chart((line_chart + bicycles + labels).properties(height=280), use_container_width=True)
+
+st.divider()
+
+# --- BAGIAN C: KLASEMEN SEMENTARA (LEADERBOARD) ---
+st.subheader("🏆 Klasemen Sementara (Leaderboard)")
+
+# Menampilkan dataframe bersih tanpa kolom 'Tujuan Utama'
+st.dataframe(
+    df_leaderboard[['Peringkat', 'Nama', 'Total Poin', 'Bintang', 'Status']], 
+    use_container_width=True, 
+    hide_index=True
+)
 
 st.divider()
 if st.button("Log Out Akun", use_container_width=True):
