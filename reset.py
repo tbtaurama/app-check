@@ -1,4 +1,3 @@
-pandas
 import datetime
 import sqlite3
 import pandas as pd
