@@ -323,4 +323,90 @@ st.subheader("📅 Panel Presensi Harian")
 
 # STATUS KEGAGALAN (JIKA SUDAH GAGAL, KUNCI TOTAL APLIKASI)
 if my_data['Status'] == "❌ GAGAL":
-    st.error("💀 **ANDA
+    st.error("💀 **ANDA TELAH GAGAL DAN TERELIMINASI DARI PROGRAM.**\n\nAnda telah melanggar batas toleransi (bolos 2 hari berturut-turut ATAU melebihi kuota 1 kali bolos dalam blok minggu ini). Akses pengisian presensi Anda telah ditutup permanen.")
+    st.stop()
+
+# SISTEM PERINGATAN KETAT (WARNING SYSTEM)
+if my_data['kemarin_bolos']:
+    st.warning("⚠️ **PERINGATAN KRITIS:** Anda bolos/absen kemarin. Berdasarkan aturan sistem, **jika Anda bolos hari ini, Anda langsung GAGAL** (tereliminasi). Pastikan Anda melakukan Check-In malam ini!")
+elif my_data['sisa_kuota_blok'] <= 0:
+    st.warning(f"⚠️ **PERINGATAN KUOTA MINGGU INI:** Anda sudah menggunakan 1 kali hak bolos pada siklus minggu ini (H-{my_data['hari_blok_awal']} s.d H-{my_data['hari_blok_awal']+6}). **Bolos satu kali lagi pada minggu ini = GAGAL.**")
+else:
+    st.info(f"💡 Kuota bolos aman. Anda memiliki hak bolos **{my_data['sisa_kuota_blok']} kali** pada siklus minggu ini (H-{my_data['hari_blok_awal']} s.d H-{my_data['hari_blok_awal']+6}).")
+
+# CEK WAKTU WIB & STATUS LIBUR NASIONAL
+app_status = get_app_status()
+is_libur = (app_status == "holiday")
+
+wib_tz = datetime.timezone(datetime.timedelta(hours=7))
+waktu_sekarang = datetime.datetime.now(wib_tz)
+jam_sekarang = waktu_sekarang.time()
+
+jam_mulai = datetime.time(20, 0)
+jam_selesai = datetime.time(23, 0)
+status_dalam_jendela = jam_mulai <= jam_sekarang <= jam_selesai
+
+tampilan_waktu = waktu_sekarang.strftime("%H:%M:%S WIB")
+
+if is_libur:
+    st.success(f"📢 **HARI LIBUR NASIONAL** | Waktu Server: **{tampilan_waktu}**\n\nSuper Admin meliburkan presensi hari ini. Poin dan lencana Bintang Anda aman tanpa perlu Check-In.")
+    # Otomatis catatkan status holiday ke database jika belum ada
+    conn = sqlite3.connect(DB_NAME)
+    user_logs = pd.read_sql_query("SELECT day_number FROM check_ins WHERE username=?", conn, params=(uname_aktif,))['day_number'].tolist()
+    hari_target = max(user_logs) + 1 if user_logs else 1
+    if hari_target <= 60:
+        c = conn.cursor()
+        c.execute("INSERT OR IGNORE INTO check_ins VALUES (?, ?, ?, ?)", (uname_aktif, hari_target, "holiday", datetime.datetime.now()))
+        conn.commit()
+    conn.close()
+    st.stop()
+    
+elif status_dalam_jendela:
+    st.success(f"⏳ **JENDELA PRESENSI TERBUKA** | Waktu: **{tampilan_waktu}** (Batas: 20.00 - 23.00 WIB)")
+else:
+    st.warning(f"🔒 **PRESENSI TERTUTUP** | Waktu Server: **{tampilan_waktu}**\n\nTombol aktif setiap pukul **20.00 - 23.00 WIB**.")
+
+# LOGIKA TOMBOL INPUT PRESENSI
+conn = sqlite3.connect(DB_NAME)
+user_logs = pd.read_sql_query("SELECT day_number, status FROM check_ins WHERE username=?", conn, params=(uname_aktif,)).set_index('day_number')['status'].to_dict()
+
+hari_target = 1
+while hari_target in user_logs:
+    hari_target += 1
+
+if hari_target > 60:
+    st.success("🎉 **LUAR BIASA! Anda telah menyelesaikan balapan 60 Hari!**")
+else:
+    st.markdown(f"**Tindakan untuk Hari Ke-{hari_target}:**")
+    
+    # Layout mobile-friendly: tombol di-stack vertikal jika di layar kecil, atau gunakan kolom responsif
+    col_b1, col_b2 = st.columns(2)
+    with col_b1:
+        if st.button(f"✅ Check-In (H-{hari_target})", type="primary", disabled=not status_dalam_jendela, use_container_width=True):
+            c = conn.cursor()
+            c.execute("INSERT OR REPLACE INTO check_ins VALUES (?, ?, ?, ?)", (uname_aktif, hari_target, "checked_in", datetime.datetime.now()))
+            conn.commit()
+            st.rerun()
+            
+    with col_b2:
+        if st.button(f"❌ Bolos (H-{hari_target})", type="secondary", disabled=not status_dalam_jendela, use_container_width=True):
+            c = conn.cursor()
+            c.execute("INSERT OR REPLACE INTO check_ins VALUES (?, ?, ?, ?)", (uname_aktif, hari_target, "missed", datetime.datetime.now()))
+            conn.commit()
+            st.rerun()
+
+conn.close()
+
+# RIWAYAT VISUAL MINIMALIS (RESPONSIF)
+st.markdown("<br>**Riwayat Visual Anda:**", unsafe_allow_html=True)
+grid_cols = st.columns(10)
+for d in range(1, 61):
+    status_icon = "⚪" 
+    if d in user_logs:
+        val = user_logs[d]
+        if val == "checked_in": status_icon = "🟢"
+        elif val == "missed": status_icon = "🔴"
+        elif val == "holiday": status_icon = "🔵"
+        
+    with grid_cols[(d-1) % 10]:
+        st.markdown(f"<div style='text-align:center; font-size:10px;'>H{d}<br>{status_icon}</div>", unsafe_allow_html=True)
